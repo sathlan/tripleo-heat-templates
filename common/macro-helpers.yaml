@@ -1,0 +1,94 @@
+{%- macro display_info(info, msg=None) %}
+- name: "==> {{ info }}"
+  debug:
+    msg: "{{ info if msg is none else msg }}"
+  tags:
+    - always
+{%- endmacro %}
+
+{%- macro tripleo_update(task_file, task_name, step_name=None, step=None, role_name=None, step_file=True) %}
+{#- ########################
+    # tripleo_update       #
+    ########################
+    Macro that provides a common behavior accross all update step.
+
+    It focus on the user.  The goal is to provide more inteligible
+    information about what happens during the update.
+
+    Announce the task to the user: with a simple "grep '==>'" on the
+    log file clearly show what happened.
+
+    Improved error handling: Tell where the update has failed with
+    some meaningful sentences. This should help user and developer
+    debug the process.
+
+    It supports imported task with or without step and with or without
+    role constraint.
+
+    Arguments:
+
+      - task_file: the main part of the file to import.  The complete
+        filename will be calculated based on the value of step and
+        role_name and step_file.  See below for more.  Then we append
+        the ".yaml" extention to it. Mandatory.
+
+      - task_name: is displayed to the user as the high level
+        step. Mandatory.
+
+      - step_name: is displayed to the user as the sublevel task main
+        focus. Mandatory when step is used, unused otherwise.
+
+      - step: is the current step as an integer. Optional.
+
+      - role_name: is the current role.  When used we expect the task
+        file to exist under the role_name directory.  It also adds a
+        when role contstraint to the import. Optional.
+
+      - step_file: Indicates if one file per step exist.  Default to
+        True, so we expect "task_file ~ step ~ '.yaml'" to
+        exists. Optional.
+
+#}
+{%- if role_name is not none %}
+{%- set extra_description = " in role '" ~ role_name ~ "'" %}
+{%- set task_file_role_dir = role_name ~ "/" %}
+{%- else %}
+{%- set extra_description = "" %}
+{%- set task_file_role_dir = "" %}
+{%- endif %}
+{%- if step is not none %}
+{%- set task_filename = task_file_role_dir ~ task_file ~ (step if step_file else "") ~ ".yaml" %}
+{%- set task_description = task_name ~ " " ~ step ~ " which is '" ~ step_name ~ "'" ~ extra_description %}
+{%- else %}
+{%- set task_filename = task_file_role_dir ~ task_file ~ ".yaml" %}
+{%- set task_description = task_name ~ extra_description %}
+{%- endif %}
+- block:
+{#- import tasks cannot have name, so we add a description before startindg it #}
+    {{- display_info("Starting " ~ task_description)|indent(4) }}
+    {{- display_info("This will run on {{ ansible_play_hosts|join(',')|truncate(80,True) }} ({{ansible_play_hosts|length }}/{{ansible_play_hosts_all|length }})" )|indent(4) }}
+    - import_tasks: "{{ task_filename }}"
+{%- if step is not none %}
+      vars:
+        step: {{ step }}
+{%- endif %}
+    {{- display_info("Finished " ~ task_description)|indent(4) }}
+  rescue:
+    - name: "==> Error during {{ task_description }}"
+      fail:
+        msg: >
+            This happened
+            {%- raw %}
+            {{- " during '" ~ ansible_failed_task.name ~ "' task" if ansible_failed_task.name else "" }}
+            in file {{ _task_file_path }} for host {{ansible_fqdn}}.
+            {%- endraw %}
+      tags:
+        - always
+  when:
+{%- if role_name %}
+    - tripleo_role_name == '{{ role_name }}'
+{%- endif %}
+    - "_task_file_path is exists"
+  vars:
+    _task_file_path: "{% raw %}{{ playbook_dir }}{% endraw %}/{{ task_filename }}"
+{%- endmacro %}

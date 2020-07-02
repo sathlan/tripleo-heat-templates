@@ -25,7 +25,9 @@
 {% set fast_forward_upgrade_prep_steps_max = 3 -%}
 {% set post_update_steps_max = 4 -%}
 {% set scale_steps_max = 1 -%}
-
+{% set tripleo_post_minor_update_step_name = {0: 'first step', 1: 'second step', 2: 'third step', 3: 'fourth step', 4: 'debug 1', 5: 'debug 2', 6: 'debug 3'} -%}
+{% set tripleo_minor_update_step_name = {0: 'validations', 1: 'remove node from cluster', 2: 'pull the latest HA related images and retag the it pcmklatest', 3: 'yum upgrade', 4: 'add the node back to the cluster', 5: 'verification', 6: 'debug'} -%}
+{% set tripleo_common_deployment_step_name = {1: 'Load Balancer configuration baremetal', 2: 'Core Services', 3: 'Early Openstack Service setup (Ringbuilder, etc.)', 4: 'General OpenStack Services (Database/Rabbit/NTP/etc.)', 5: 'Service activation (Pacemaker), online data migration'} -%}
 heat_template_version: rocky
 
 description: >
@@ -830,13 +832,6 @@ outputs:
 
       external_deploy_steps_tasks: {get_attr: [ExternalDeployTasks, value]}
       external_post_deploy_steps_tasks: {get_attr: [ExternalPostDeployTasks, value]}
-      update_steps_tasks: |
-{%- for role in roles %}
-            - include_tasks: {{role.name}}/update_tasks.yaml
-              when: tripleo_role_name == '{{role.name}}'
-              tags:
-                - always
-{%- endfor %}
       update_steps_playbook:
 {{ self.deploy_steps_str_replace_params() }}
           template: |
@@ -864,33 +859,40 @@ outputs:
                 docker_puppet_mount_host_puppet: DOCKER_PUPPET_MOUNT_HOST_PUPPET
                 tripleo_minor_update: true
               tasks:
-                - import_tasks: hiera_steps_tasks.yaml
-                - include_tasks: update_steps_tasks.yaml
-                  with_sequence: start=0 end={{update_steps_max-1}}
-                  loop_control:
-                    loop_var: step
-                  tags:
-                    - always
-                - include_tasks: {{role.name}}/host_prep_tasks.yaml
-                  when: tripleo_role_name == '{{role.name}}'
-                  tags:
-                    - always
-                - import_tasks: deploy_steps_tasks_step_0.yaml
-                  vars:
-                    step: 0
-                - import_tasks: common_deploy_steps_tasks_step_1.yaml
-                - include_tasks: common_deploy_steps_tasks.yaml
-                  with_sequence: start=1 end={{deploy_steps_max-1}}
-                  loop_control:
-                    loop_var: step
-                  tags:
-                    - always
-                - include_tasks: post_update_steps_tasks.yaml
-                  with_sequence: start=0 end={{post_update_steps_max-1}}
-                  loop_control:
-                    loop_var: step
-                  tags:
-                    - always
+                {{- helpers.tripleo_update('hiera_steps_tasks', 'Render hiera data')|indent(16) }}
+                {{- helpers.tripleo_update('host_prep_tasks',
+                                           'Running host prep tasks (minimal host requirements)',
+                                           role_name=role.name)|indent(16) }}
+                {{- helpers.display_info("Running update step tasks")|indent(16) }}
+{%- for step in range(0,update_steps_max) %}
+                {{- helpers.tripleo_update('update_tasks_step',
+                                           'update step',
+                                           tripleo_minor_update_step_name[step],
+                                           step,
+                                           role.name)|indent(16) }}
+{%- endfor %}
+                {{- helpers.tripleo_update('deploy_steps_tasks_step_',
+                                           'Common deployment tasks',
+                                           'Generate container scripts and all step0 deployment tasks',
+                                           step=0)|indent(16) }}
+                {{- helpers.tripleo_update('common_deploy_steps_tasks_step_',
+                                           'Common deployment tasks',
+                                           'Generate container support files',
+                                           step=1)|indent(16) }}
+{%- for step in range(1,deploy_steps_max) %}
+                {{- helpers.tripleo_update('common_deploy_steps_tasks',
+                                           'Common deployment step',
+                                           tripleo_common_deployment_step_name[step],
+                                           step, step_file=False)|indent(16) }}
+{%- endfor %}
+                {{- helpers.display_info("Run post update tasks")|indent(16) }}
+{%- for step in range(0,post_update_steps_max) %}
+                {{- helpers.tripleo_update('post_update_tasks_step',
+                                           'post update step',
+                                           tripleo_post_minor_update_step_name[step],
+                                           step,
+                                           role.name)|indent(16) }}
+{%- endfor %}
 {%- endfor %}
       external_update_steps_tasks: {get_attr: [ExternalUpdateTasks, value]}
       external_update_steps_playbook:
@@ -1264,11 +1266,4 @@ outputs:
                     - is_bootstrap_node|bool
                   tags:
                     - always
-{%- endfor %}
-      post_update_steps_tasks: |
-{%- for role in roles %}
-            - include_tasks: {{role.name}}/post_update_tasks.yaml
-              when: tripleo_role_name == '{{role.name}}'
-              tags:
-                - always
 {%- endfor %}
